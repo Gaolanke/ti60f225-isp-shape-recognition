@@ -1,0 +1,62 @@
+# Efinity build products
+/outflow/
+/outflow_camcfg_check/
+/outflow_camcfg_full/
+/work_syn/
+/work_pnr/
+/work_dbg/
+/work_camcfg_syn/
+/work_camcfg_full/
+/build_ref/
+/ooc/
+/tmp_pdf_pages/
+
+# Simulation products
+/sim/out/
+/sim/wave/
+*.vvp
+*.vcd
+*.wlf
+*.ppm
+*.log
+*.err
+__pycache__/
+*.pyc
+
+# Local backups and scratch files
+*.bak
+*.bak_*
+* - Copy.*
+*~
+~$*
+/README_MAX.md
+/README_MAX.md.bak*
+/README_v50.md
+/README_v8.12_RED_EDGE.md
+/tmp_*
+/open_source_*.patch
+/diag_*
+/screen_*
+/reference_*
+/ref_*.png
+/$null
+/{1}
+/Panel_1080p_reg.mem
+/docs_sc431hai.txt
+/yuvpattern_mif.memh
+/debug.json
+/debug_profile*
+/la*_waveform*.gtkw
+/.firecrawl/
+
+# Vendor documents and alternative-camera material not needed by this design
+/rtl/cam/
+/rtl/cam_i2c_ctrl/I2C_Master.docx
+*.wlf
+
+# OS / editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+

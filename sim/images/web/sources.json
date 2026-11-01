@@ -1,0 +1,38 @@
+[
+  {
+    "file": "Ionicons_ellipse-outline.svg.png",
+    "shape": "circle",
+    "title": "File:Ionicons ellipse-outline.svg",
+    "url": "https://commons.wikimedia.org/wiki/File:Ionicons_ellipse-outline.svg",
+    "license": "MIT",
+    "artist": "Ionic Team",
+    "note": "圆形正样本"
+  },
+  {
+    "file": "Rectangle_outline_Pinhead_icon.svg.png",
+    "shape": "rectangle",
+    "title": "File:Rectangle outline Pinhead icon.svg",
+    "url": "https://commons.wikimedia.org/wiki/File:Rectangle_outline_Pinhead_icon.svg",
+    "license": "CC0",
+    "artist": "Quincy Morgan",
+    "note": "矩形正样本"
+  },
+  {
+    "file": "triangle_up_cc0.png",
+    "shape": "triangle",
+    "title": "File:Triangle up outline Pinhead icon.svg",
+    "url": "https://commons.wikimedia.org/wiki/File:Triangle_up_outline_Pinhead_icon.svg",
+    "license": "CC0",
+    "artist": "Quincy Morgan",
+    "note": "三角形正样本；素材页登记于 2026-03-07"
+  },
+  {
+    "file": "plus_Plus_sign_svg.png",
+    "shape": "plus",
+    "title": "File:Plus sign.svg",
+    "url": "https://commons.wikimedia.org/wiki/File:Plus_sign.svg",
+    "license": "Public domain",
+    "artist": "Indolences",
+    "note": "加号负样本，必须不触发圆/矩形/三角形"
+  }
+]
