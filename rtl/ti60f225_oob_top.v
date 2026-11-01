@@ -1518,30 +1518,87 @@ wire        edge_de, edge_hs, edge_vs;
 wire        shape_hit;
 wire [3:0]  shape_dbg;
 
-shape_rec #(
-    .H_ACTIVE     (HACT),
-    .V_ACTIVE     (VACT),
-    .MIN_SPAN     (24),      // 1/4 尺度最小面积(约 24*16 = 384 全分辨率像素)
-    .MAX_SPAN     (12000)    // 超过视为板框/桌面
-) u_shape_proc (
-    .clk         (hdmi_tx_slow_clk),
-    .rst_n       (vid_rst_n),
-    .i_de        (e0_de),
-    .i_hs        (e0_hs),
-    .i_vs        (e0_vs),
-    .i_rgb       (e0_rgb),
-    .i_edge      (e0_edge),
-    .i_dir16     (e0_dir16),
-    .i_row       (e0_row),
-    .i_en        (shape_on),
-    .i_draw_x0   (11'd0),       // 模式4全屏识别, 与上传视频一致
-    .o_de        (edge_de),
-    .o_hs        (edge_hs),
-    .o_vs        (edge_vs),
-    .o_rgb       (edge_rgb),
-    .o_shape_hit (shape_hit),
-    .o_dbg       (shape_dbg)
-);
+//==============================================================================
+// 形状识别器选择
+//   1 = 旧的参数化检测器 (固定半径 Hough + 固定行程 + 5 种长宽比假设)
+//       对"打印靶纸"这类线条粗、尺寸规整的目标更稳, 实拍手绘图纸优先用这个
+//   0 = 新的连通域 + 几何特征 + 决策树
+//       对干净闭合轮廓、尺度变化更鲁棒, 但训练分布是合成的, 实拍细线/纹理纸
+//       容易把多个目标并成一块
+//   两者端口完全一致, 用 generate 只例化一个.
+//==============================================================================
+localparam integer USE_LEGACY_SHAPE = 1;
+
+generate
+if (USE_LEGACY_SHAPE) begin : g_legacy_shape
+    shape_proc #(
+        .H_ACTIVE       (HACT),
+        .V_ACTIVE       (VACT),
+        .BIN_SHIFT      (3),
+        .ACC_W          (256),
+        .RECT_LEN_MIN   (64),
+        .RECT_LEN_MAX   (360),
+        .RECT_GAP_MIN   (40),
+        .RECT_SIDE_MIN  (40),
+        .RUN_GAP        (12),
+        .TOL_PX         (10),
+        .R0             (40),
+        .R_STEP         (16),
+        .R_NUM          (10),
+        .HOUGH_TH       (20),
+        .CIRC_RATIO_SHIFT (4),
+        .CIRC_ARC_TOL   (16),
+        .CIRC_ARC_MIN   (6),
+        .CIRC_CORNER_MAX(64),
+        .CIRC_HOLD      (90),
+        .RECT_HOLD      (90),
+        .TRI_W_MIN      (72)
+    ) u_shape_proc (
+        .clk         (hdmi_tx_slow_clk),
+        .rst_n       (vid_rst_n),
+        .i_de        (e0_de),
+        .i_hs        (e0_hs),
+        .i_vs        (e0_vs),
+        .i_rgb       (e0_rgb),
+        .i_edge      (e0_edge),
+        .i_dir16     (e0_dir16),
+        .i_row       (e0_row),
+        .i_en        (shape_on),
+        .i_draw_x0   (11'd0),
+        .o_de        (edge_de),
+        .o_hs        (edge_hs),
+        .o_vs        (edge_vs),
+        .o_rgb       (edge_rgb),
+        .o_shape_hit (shape_hit),
+        .o_dbg       (shape_dbg)
+    );
+end else begin : g_new_shape
+    shape_rec #(
+        .H_ACTIVE     (HACT),
+        .V_ACTIVE     (VACT),
+        .MIN_SPAN     (24),
+        .MAX_SPAN     (12000)
+    ) u_shape_proc (
+        .clk         (hdmi_tx_slow_clk),
+        .rst_n       (vid_rst_n),
+        .i_de        (e0_de),
+        .i_hs        (e0_hs),
+        .i_vs        (e0_vs),
+        .i_rgb       (e0_rgb),
+        .i_edge      (e0_edge),
+        .i_dir16     (e0_dir16),
+        .i_row       (e0_row),
+        .i_en        (shape_on),
+        .i_draw_x0   (11'd0),
+        .o_de        (edge_de),
+        .o_hs        (edge_hs),
+        .o_vs        (edge_vs),
+        .o_rgb       (edge_rgb),
+        .o_shape_hit (shape_hit),
+        .o_dbg       (shape_dbg)
+    );
+end
+endgenerate
 
 // 诊断信号汇合(避免未使用告警)
 wire dbg_sink = e0_edge_flag ^ shape_dbg[3] ^ shape_dbg[2] ^ shape_dbg[1] ^ shape_dbg[0];
