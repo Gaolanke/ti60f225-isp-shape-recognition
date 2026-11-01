@@ -555,6 +555,13 @@ reg         cfg_ack_meta;
 reg         cfg_ack_sync;
 wire        cfg_busy = (cfg_req_tgl != cfg_ack_sync);
 
+// 按键通道的请求(可能与 AE 通道共用同一组 cfg_* 寄存器)
+reg         key_req_tgl;
+reg  [1:0]  key_sel;
+reg  [15:0] key_exp;
+reg  [7:0]  key_gain_c;
+reg  [7:0]  key_gain_f;
+
 // 调节模式与档位(在 HDMI 时钟域维护, 同时用于 LED 反馈)
 reg         cam_adj_mode;
 reg  [3:0]  exp_level;
@@ -920,12 +927,44 @@ endfunction
 
 wire [3:0]  wb_r_level_px = gray4_to_bin(wb_r_level_gs);
 wire [3:0]  wb_b_level_px = gray4_to_bin(wb_b_level_gs);
-wire [15:0] wb_r_trim = DEF_R_GAIN - 16'd64 + {9'd0, wb_r_level_px, 3'b000};
-wire [15:0] wb_b_trim = DEF_B_GAIN - 16'd64 + {9'd0, wb_b_level_px, 3'b000};
-// 实际送入 debayer 的白平衡增益: 默认用编译期 DEF_*_GAIN, 避免调试VIO上电初值造成偏色
-wire [15:0] wb_r = USE_VIO_WB ? (|r_gain ? r_gain : wb_r_trim) : wb_r_trim;
-wire [15:0] wb_g = USE_VIO_WB ? (|g_gain ? g_gain : DEF_G_GAIN) : DEF_G_GAIN;
-wire [15:0] wb_b = USE_VIO_WB ? (|b_gain ? b_gain : wb_b_trim) : wb_b_trim;
+
+//-----------------------------------------------------------------------------
+// 白平衡增益: 自动白平衡(cam_ae_awb) + 手动覆盖
+//
+// 旧实现是编译期常量 DEF_R/ DEF_B, 与光照无关: 夜间冷光下凑出来的 1.5625x/1.8125x
+// 在白天阳光下会把本来就偏高的 R 再放大一次, 而且是 8bit 乘法后饱和到 255,
+// 红通道直接削顶 -> 画面偏红且丢层次. 手动窗口只有 +-4 档, 下限仍是 1.3125x,
+// 压不回 1.0, 所以"手动白平衡无效".
+//
+// 现在由 cam_ae_awb 逐帧估计增益; 进入调节模式的"白平衡页"后 i_man_en=1,
+// 环路冻结, 手动档位直接给出 96..576 (0.375x..2.25x, 每档 0.125x) 的增益,
+// 范围和方向都覆盖实际需要, 退出该页即恢复自动.
+//-----------------------------------------------------------------------------
+wire [15:0] awb_r_gain, awb_g_gain, awb_b_gain;
+wire        awb_locked;
+wire [3:0]  awb_dbg;
+wire        ae_req_vid, ae_ack_vid;
+wire [15:0] ae_exp_vid;
+wire [7:0]  ae_gc_vid, ae_gf_vid;
+
+// 慢速控制位跨到像素时钟域 (2FF 同步)
+reg cam_adj_v1, cam_adj_v2, wb_page_v1, wb_page_v2;
+always @(posedge vid_clk_dvi2 or negedge vid_rst_n) begin
+    if (!vid_rst_n) begin
+        cam_adj_v1 <= 1'b0; cam_adj_v2 <= 1'b0;
+        wb_page_v1 <= 1'b0; wb_page_v2 <= 1'b0;
+    end else begin
+        cam_adj_v1 <= cam_adj_mode; cam_adj_v2 <= cam_adj_v1;
+        wb_page_v1 <= wb_page;      wb_page_v2 <= wb_page_v1;
+    end
+end
+wire        wb_man_en = cam_adj_v2 & wb_page_v2;
+wire [15:0] wb_r_man  = 16'd96 + {9'd0, wb_r_level_px, 5'b0};
+wire [15:0] wb_b_man  = 16'd96 + {9'd0, wb_b_level_px, 5'b0};
+
+wire [15:0] wb_r = wb_man_en ? wb_r_man : awb_r_gain;
+wire [15:0] wb_g = awb_g_gain;
+wire [15:0] wb_b = wb_man_en ? wb_b_man : awb_b_gain;
 
 debayer_top_2to1 debayer_top
 (
@@ -946,6 +985,109 @@ debayer_top_2to1 debayer_top
 	.rgb_valid_o	(rgb_valid      ),
 	.rgb_datax2_o (rgb_datax2     )//b,g,r,b,g,r
 );
+
+//-----------------------------------------------------------------------------
+// 自动白平衡 / 自动曝光
+//   统计点在去马赛克之后 (即用户实际看到的颜色), 增益回送到 debayer 的
+//   rgb_gain_v1, 构成一个逐帧闭环. 全在 vid_clk_dvi2 域内, 不跨时钟.
+//-----------------------------------------------------------------------------
+cam_ae_awb #(
+    .SEED_R_GAIN (DEF_R_GAIN),
+    .SEED_G_GAIN (DEF_G_GAIN),
+    .SEED_B_GAIN (DEF_B_GAIN)
+) u_cam_ae_awb (
+    .clk          (vid_clk_dvi2),
+    .rst_n        (vid_rst_n),
+    .i_de         (rgb_de),
+    .i_vs         (rgb_vs),
+    .i_rgb2       (rgb_datax2),
+    .i_man_en     (wb_man_en),
+    .i_man_r      (wb_r_man),
+    .i_man_b      (wb_b_man),
+    .o_r_gain     (awb_r_gain),
+    .o_g_gain     (awb_g_gain),
+    .o_b_gain     (awb_b_gain),
+    .o_awb_locked (awb_locked),
+    .o_awb_dbg    (awb_dbg),
+    .o_ae_req_tgl (ae_req_vid),
+    .o_ae_exp     (ae_exp_vid),
+    .o_ae_gain_c  (ae_gc_vid),
+    .o_ae_gain_f  (ae_gf_vid),
+    .i_ae_ack_tgl (ae_ack_vid),
+    .i_ae_en      (~cam_adj_v2)
+);
+
+//-----------------------------------------------------------------------------
+// cfg_* 总线仲裁 (hdmi_tx_slow_clk 域)
+//   按键通道只在"摄像头调节模式"内产生请求, AE 只在非调节模式下发请求,
+//   两者互斥, 共用一套四相握手, 不会互相踩掉.
+//-----------------------------------------------------------------------------
+reg         ae_req_m, ae_req_s, ae_req_seen;
+reg         ae_pending;
+reg  [15:0] ae_exp_lat;
+reg  [7:0]  ae_gc_lat, ae_gf_lat;
+
+wire ae_fire = ae_pending && !cfg_busy && !cam_adj_mode &&
+               (key_req_tgl == cfg_req_tgl);
+
+always @(posedge hdmi_tx_slow_clk or negedge vid_rst_n) begin
+    if (!vid_rst_n) begin
+        ae_req_m   <= 1'b0;
+        ae_req_s   <= 1'b0;
+        ae_req_seen<= 1'b0;
+        ae_pending <= 1'b0;
+        ae_exp_lat <= 16'h0BAD;
+        ae_gc_lat  <= 8'h81;
+        ae_gf_lat  <= 8'h32;
+    end else begin
+        ae_req_m <= ae_req_vid;
+        ae_req_s <= ae_req_m;
+        if (ae_req_s != ae_req_seen) begin
+            ae_req_seen <= ae_req_s;
+            ae_exp_lat  <= ae_exp_vid;
+            ae_gc_lat   <= ae_gc_vid;
+            ae_gf_lat   <= ae_gf_vid;
+            ae_pending  <= 1'b1;
+        end else if (ae_fire) begin
+            ae_pending  <= 1'b0;
+        end
+    end
+end
+
+always @(posedge hdmi_tx_slow_clk or negedge vid_rst_n) begin
+    if (!vid_rst_n) begin
+        cfg_req_tgl    <= 1'b0;
+        cfg_sel_job    <= 2'd0;
+        cfg_exp_job    <= 16'h0BAD;
+        cfg_gain_c_job <= 8'h81;
+        cfg_gain_f_job <= 8'h32;
+    end else if ((key_req_tgl != cfg_req_tgl) && !cfg_busy) begin
+        cfg_sel_job    <= key_sel;
+        cfg_exp_job    <= key_exp;
+        cfg_gain_c_job <= key_gain_c;
+        cfg_gain_f_job <= key_gain_f;
+        cfg_req_tgl    <= key_req_tgl;
+    end else if (ae_fire) begin
+        cfg_sel_job    <= 2'd2;
+        cfg_exp_job    <= ae_exp_lat;
+        cfg_gain_c_job <= ae_gc_lat;
+        cfg_gain_f_job <= ae_gf_lat;
+        cfg_req_tgl    <= ~cfg_req_tgl;
+    end
+end
+
+// I2C 完成信号回到像素时钟域, 给 AE 做握手确认
+reg ae_ack_1, ae_ack_2;
+always @(posedge vid_clk_dvi2 or negedge vid_rst_n) begin
+    if (!vid_rst_n) begin
+        ae_ack_1 <= 1'b0;
+        ae_ack_2 <= 1'b0;
+    end else begin
+        ae_ack_1 <= cfg_ack_sync;
+        ae_ack_2 <= ae_ack_1;
+    end
+end
+assign ae_ack_vid = ae_ack_2;
 reg rgb_vs_r = 'd0;
 always @( posedge hdmi_tx_slow_clk )
 begin
@@ -1183,11 +1325,11 @@ always @(posedge hdmi_tx_slow_clk or negedge vid_rst_n) begin
         wb_page        <= 1'b0;
         wb_r_level     <= 4'd8;
         wb_b_level     <= 4'd8;
-        cfg_req_tgl    <= 1'b0;
-        cfg_sel_job    <= 2'd0;
-        cfg_exp_job    <= 16'h0BAD;
-        cfg_gain_c_job <= 8'h81;
-        cfg_gain_f_job <= 8'h32;
+        key_req_tgl    <= 1'b0;
+        key_sel    <= 2'd0;
+        key_exp    <= 16'h0BAD;
+        key_gain_c <= 8'h81;
+        key_gain_f <= 8'h32;
     end else begin
         if (combo12_fire) begin
             cam_adj_mode <= ~cam_adj_mode;       // 组合键切换调节模式
@@ -1207,11 +1349,11 @@ always @(posedge hdmi_tx_slow_clk or negedge vid_rst_n) begin
                         end else begin           // 曝光/增益页: 恢复传感器默认
                             exp_level      <= 4'd15;
                             gain_level     <= 4'd6;
-                            cfg_sel_job    <= 2'd2;
-                            cfg_exp_job    <= 16'h0BAD;
-                            cfg_gain_c_job <= 8'h81;
-                            cfg_gain_f_job <= 8'h32;
-                            cfg_req_tgl    <= ~cfg_req_tgl;
+                            key_sel    <= 2'd2;
+                            key_exp    <= 16'h0BAD;
+                            key_gain_c <= 8'h81;
+                            key_gain_f <= 8'h32;
+                            key_req_tgl    <= ~key_req_tgl;
                         end
                     end else if (wb_page) begin
                         if (k_lg0) begin          // 红通道 +
@@ -1226,32 +1368,32 @@ always @(posedge hdmi_tx_slow_clk or negedge vid_rst_n) begin
                     end else if (k_lg0) begin     // 曝光 +
                         if (exp_level != 4'd15) begin
                             exp_level   <= exp_level + 1'b1;
-                            cfg_sel_job <= 2'd0;
-                            cfg_exp_job <= exp_code_from_level(exp_level + 1'b1);
-                            cfg_req_tgl <= ~cfg_req_tgl;
+                            key_sel <= 2'd0;
+                            key_exp <= exp_code_from_level(exp_level + 1'b1);
+                            key_req_tgl <= ~key_req_tgl;
                         end
                     end else if (k_sh0) begin     // 曝光 -
                         if (exp_level != 4'd0) begin
                             exp_level   <= exp_level - 1'b1;
-                            cfg_sel_job <= 2'd0;
-                            cfg_exp_job <= exp_code_from_level(exp_level - 1'b1);
-                            cfg_req_tgl <= ~cfg_req_tgl;
+                            key_sel <= 2'd0;
+                            key_exp <= exp_code_from_level(exp_level - 1'b1);
+                            key_req_tgl <= ~key_req_tgl;
                         end
                     end else if (k_lg1) begin     // 增益 +
                         if (gain_level != 4'd9) begin
                             gain_level     <= gain_level + 1'b1;
-                            cfg_sel_job    <= 2'd1;
-                            cfg_gain_c_job <= gain_coarse_from_level(gain_level + 1'b1);
-                            cfg_gain_f_job <= gain_fine_from_level(gain_level + 1'b1);
-                            cfg_req_tgl    <= ~cfg_req_tgl;
+                            key_sel    <= 2'd1;
+                            key_gain_c <= gain_coarse_from_level(gain_level + 1'b1);
+                            key_gain_f <= gain_fine_from_level(gain_level + 1'b1);
+                            key_req_tgl    <= ~key_req_tgl;
                         end
                     end else if (k_sh1) begin     // 增益 -
                         if (gain_level != 4'd0) begin
                             gain_level     <= gain_level - 1'b1;
-                            cfg_sel_job    <= 2'd1;
-                            cfg_gain_c_job <= gain_coarse_from_level(gain_level - 1'b1);
-                            cfg_gain_f_job <= gain_fine_from_level(gain_level - 1'b1);
-                            cfg_req_tgl    <= ~cfg_req_tgl;
+                            key_sel    <= 2'd1;
+                            key_gain_c <= gain_coarse_from_level(gain_level - 1'b1);
+                            key_gain_f <= gain_fine_from_level(gain_level - 1'b1);
+                            key_req_tgl    <= ~key_req_tgl;
                         end
                     end
                 end
@@ -1376,28 +1518,11 @@ wire        edge_de, edge_hs, edge_vs;
 wire        shape_hit;
 wire [3:0]  shape_dbg;
 
-shape_proc #(
+shape_rec #(
     .H_ACTIVE     (HACT),
     .V_ACTIVE     (VACT),
-    .BIN_SHIFT    (3),      // 累加器 1/8 分辨率 (240x136)
-    .ACC_W        (256),
-    .RECT_LEN_MIN (64),     // 视为矩形长边的最小水平行程(兼容稍小目标)
-    .RECT_LEN_MAX (360),    // 过滤板框/桌面等超长线，避免它们占满 top-3 候选
-    .RECT_GAP_MIN (40),     // 上下长边最小间距
-    .RECT_SIDE_MIN(40),     // 左右最小间距
-    .RUN_GAP      (12),     // 行程间隙容差(抗虚线化/短断边)
-    .TOL_PX       (10),     // 竖边验证列容差(容忍轻微透视倾斜)
-    .R0           (40),     // 起始半径
-    .R_STEP       (16),     // 半径步进 (10 档: 40/56/.../184，框更贴合)
-    .R_NUM        (10),     // 40/56/.../184，共 10 档
-    .HOUGH_TH     (20),     // 圆投票峰值阈值(降低以提高弱轮廓锁定率)
-    .CIRC_RATIO_SHIFT(4),   // 峰值至少为 ROI 边缘数的 4/64，结合弧证据抗纹理
-    .CIRC_ARC_TOL (16),     // 椭圆八方向采样窗口半宽(8px 量化 + 透视圆心偏移)
-    .CIRC_ARC_MIN (6),      // 8 个弧窗口中至少命中 6 个，提高圆形精度并压制多边形误锁
-    .CIRC_CORNER_MAX(64),   // 四角允许少量背景纹理，主判据仍是 Hough+弧证据
-    .CIRC_HOLD    (90),     // 圆结果保持帧数(约 1.5s)
-    .RECT_HOLD    (90),     // 矩形结果保持帧数
-    .TRI_W_MIN    (72)      // 三角形最小底边宽度
+    .MIN_SPAN     (24),      // 1/4 尺度最小面积(约 24*16 = 384 全分辨率像素)
+    .MAX_SPAN     (12000)    // 超过视为板框/桌面
 ) u_shape_proc (
     .clk         (hdmi_tx_slow_clk),
     .rst_n       (vid_rst_n),

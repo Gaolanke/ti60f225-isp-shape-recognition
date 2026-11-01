@@ -60,3 +60,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+
+# 识别算法研究中间产物
+/build/recog/
+/build/compile_log.txt
+/sim/tb/tb_cam_ae_awb.v.bak

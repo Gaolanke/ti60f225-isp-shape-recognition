@@ -1,113 +1,111 @@
-# Ti60F225 实时图像边缘检测系统
+# Ti60F225 实时图像处理与形状识别系统
 
-基于 **Efinix Titanium Ti60F225I3**、**SC431HAI2** 图像传感器和纯 RTL 数据通路的实时图像处理工程。系统从 MIPI CSI-2 摄像头采集 1920×1080 RAW10 视频，经 DDR3 三 Bank 帧缓存后完成灰度化、滤波、Sobel/Canny 边缘检测、彩色边缘叠加、HDMI 输出，并支持圆形/椭圆、矩形/正方形、三角形/旋转三角形的几何识别。
+基于 **Efinix Titanium Ti60F225I3**、**SC431HAI2** 图像传感器和纯 RTL 数据通路的实时
+视觉系统。从 4-lane MIPI CSI-2 采集 1920×1080 RAW10，经 DDR3 帧缓存后完成去马赛克、
+**自适应白平衡 + 自动曝光**、灰度化、滤波、Sobel/Canny 边缘检测、HDMI 输出，以及
+**基于连通域几何特征 + 决策树的圆/矩形/三角形识别**。
 
 ![系统总体架构](docs/images/system_architecture.png)
 
-## 主要功能
+## 这一版改了什么
 
-- 4-lane MIPI CSI-2、RAW10 输入，SC431HAI2 有效窗口对齐与裁剪。
-- 1920×1080@60 HDMI 输出，三 Bank DDR3 帧缓存，支持画面冻结。
-- 3×3 中值、Gaussian、直通、中值+Gaussian 级联滤波。
-- Sobel 梯度、22.5° 方向分带、1/2 插值 NMS、双阈值滞回。
-- 五种显示模式：分屏、彩色原图+红边、二值边缘、画中画、目标识别。
-- 圆形/椭圆、矩形/正方形、三角形/旋转三角形识别，带外接框与中文标签。
-- KEY1/KEY2/KEY3 组合按键调节阈值、滤波、显示模式、曝光、增益和白平衡。
-- 无 CPU、无外部上位机，处理链路全部由 RTL 完成。
+| 问题 | 旧实现 | 本版 |
+| --- | --- | --- |
+| 白天偏红、夜间正常、手动白平衡无效 | 编译期固定增益 R=1.5625×/B=1.8125×，8bit 削顶，手动窗口下限仍 1.3125× | 逐帧闭环自适应白平衡（近中性像素 + 灰度世界两段式），增益 0.5~2.0×，手动 0.375~2.25× |
+| 曝光工作点固定 | 固定 4.813× 模拟增益 + 固定曝光 | 轻量 AE：先调曝光后调增益，带死区与稳定等待 |
+| 形状识别参数敏感、响应慢 | 固定半径 Hough + 固定行程 + 5 种长宽比假设 | 1/4 降采样连通域 + 4 个归一化特征 + 57 节点决策树 |
+
+详见 [白平衡与曝光](docs/white-balance.md)、[识别算法](docs/recognition.md)。
 
 ## 硬件平台
 
 | 项目 | 配置 |
 | --- | --- |
-| FPGA | Efinix Ti60F225I3，Ti60F225A_V4 Demo Board |
-| 摄像头 | SC431HAI2，J4 转接板，4-lane MIPI CSI-2，RAW10 |
+| FPGA | Efinix Ti60F225I3（Titanium 家族，Ti60F225A_V4 Demo Board） |
+| 摄像头 | SC431HAI2，接 J4 转接板，4-lane MIPI CSI-2，RAW10 |
+| 摄像头 I²C | SCL=GPIOR_20，SDA=GPIOR_18（板上 4.7 kΩ 上拉至 3V3），RST=GPIOR_16，地址 0x30 |
+| MIPI Bank | J2、J3 均为 1.2 V |
 | 帧缓存 | 板载 DDR3 K4B4G1646E，三 Bank 乒乓 |
 | 显示 | HDMI 1920×1080@60，像素时钟 148.5 MHz |
-| MIPI Bank | J2、J3 均为 1.2 V |
+| 按键 / 指示灯 | KEY1=GPIOR_22，KEY2=GPIOR_21，KEY3=GPIOL_03；D0~D7 |
 | 电源 | 12 V DC |
 
 ![硬件连接](docs/images/hardware_connection.png)
 
-## 目录结构
+## 数据通路
 
 ```text
-rtl/                         FPGA RTL 与应用逻辑
-  ti60f225_oob_top.v         顶层、时钟/复位、摄像头和显示连接
-  edge/edge_proc.v           灰度、滤波、Sobel/Canny、显示合成、识别
-  sensor_clipper.v           SC431HAI2 有效窗口裁剪
-  debayer/                   RAW 到 RGB 重建
-  frame_buffer_V4/           DDR3 帧缓存与 Bank 切换
-  ddr3_controller/           DDR3 控制器
-  dvi_tx/                    HDMI/TMDS 发送
-  cam_i2c_ctrl/              摄像头 I2C 配置
-ip/                          摄像头与显示 IP 配置
-sim/                         Icarus Verilog 仿真
-  tb/                        测试平台
-  images/                    仿真图片、边缘/方向激励
-  run_sim.ps1                全量或单项仿真入口
-build/                       Efinity 编译与 JTAG 烧录脚本
-docs/                        设计报告和架构图
-ti60f225_oob.xml             Efinity 工程
-ti60f225_oob.peri.xml        管脚与接口约束
-ti60f225_oob.sdc             时序约束
-```
-
-## 算法流水线
-
-```text
-MIPI RAW10
-  -> 有效窗口裁剪/对齐
-  -> DDR3 三 Bank 帧缓存
-  -> RAW 去马赛克、白平衡、灰度化
-  -> 3x3 行缓存
-  -> 中值 / Gaussian / 直通 / 级联滤波
-  -> Sobel Gx/Gy、幅值与方向
-  -> NMS
-  -> 双阈值滞回与弱边缘连接
-  -> 显示合成 / 几何识别
+MIPI RAW10 (4 lane)
+  -> sensor_clipper      1081x640 -> 1080x480 有效窗口裁剪
+  -> DDR3 三 Bank        帧缓存 / 冻结
+  -> rgb_gain_v1         白平衡增益(Q8.8，来自 cam_ae_awb)
+  -> raw_to_rgb          BGGR 去马赛克
+  -> cam_ae_awb          统计 -> 增益/曝光闭环
+  -> edge_proc           灰度 -> 中值/高斯 -> Sobel -> NMS -> 双阈值滞回
+  -> shape_rec           1/4 降采样 -> 连通域 -> 4 特征 -> 决策树
   -> HDMI 1920x1080@60
 ```
 
-![算法流水线](docs/images/edge_algorithm_pipeline.png)
+## 目录结构
 
-## 按键与指示灯
+```text
+rtl/
+  ti60f225_oob_top.v        顶层、时钟/复位、按键、显示链路
+  cam_ae_awb.v              自适应白平衡 + 自动曝光           [本版新增]
+  sensor_clipper.v          SC431HAI2 有效窗口裁剪
+  edge/edge_proc.v          灰度、滤波、Sobel/Canny、显示合成
+  edge/shape_rec.v          连通域 + 几何特征 + 决策树识别     [本版新增]
+  debayer/                  RAW -> RGB 与 Q8.8 增益
+  frame_buffer_V4/          DDR3 帧缓存与 Bank 切换
+  ddr3_controller/          DDR3 控制器
+  dvi_tx/                   HDMI/TMDS 发送
+  cam_i2c_ctrl/             摄像头 I2C 初始化与运行时曝光/增益调度
+ip/                         摄像头与显示 IP
+sim/                        Icarus Verilog 仿真
+  tb/                       测试平台
+  run_sim.ps1               回归入口
+build/                      Efinity 编译与 JTAG 烧录脚本
+docs/                       设计说明
+tools/recog_study.py        识别算法的离线对比与决策树导出
+ti60f225_oob.xml            Efinity 工程
+ti60f225_oob.peri.xml       管脚与接口约束
+ti60f225_oob.sdc            时序约束
+```
+
+## 按键
 
 | 输入 | 功能 |
 | --- | --- |
 | KEY1 短按 / 长按 | 阈值档位 +1 / 边缘颜色循环 |
-| KEY2 短按 / 长按 | 阈值档位 -1 / DDR3 画面冻结与解冻 |
+| KEY2 短按 / 长按 | 阈值档位 -1 / DDR3 画面冻结 |
 | KEY3 短按 / 长按 | 滤波模式循环 / 显示模式循环 |
-| KEY1+KEY2 | 进入或退出摄像头调节模式 |
-| KEY1+KEY3（调节模式内） | 切换曝光/增益页与白平衡页 |
-| KEY3 长按（调节模式内） | 退出摄像头调节模式 |
-| D2 / D3 | 识别状态或显示模式状态 / 冻结指示 |
-| D4–D7 | 阈值档位或参数档位 |
+| KEY1+KEY2 | 进入 / 退出摄像头调节模式（进入后 AE 与 AWB 均冻结） |
+| KEY1+KEY3 | 调节模式内：曝光/增益页 ↔ 白平衡页 |
+| KEY3 长按 | 退出调节模式 |
+
+白平衡页里 KEY1 长/短按调 R，KEY2 长/短按调 B，范围 0.375×~2.25×，每档 0.125×；
+KEY3 短按恢复默认并交还给自动白平衡。
 
 ## 仿真
 
-需要 Windows PowerShell、Icarus Verilog 12 和 Python 3（用于 PPM 转 PNG）。将 Icarus Verilog 加入 `PATH`，或设置 `IVERILOG` 环境变量指向 `iverilog.exe`。
+需要 Icarus Verilog 12 与 Python 3（PPM 转 PNG）。
 
 ```powershell
 cd sim
-.\run_sim.ps1 -Test all -Strict
+.\run_sim.ps1 -Test all -Strict      # 全量快速回归
+.\run_sim.ps1 -Test awb              # 白平衡/AE 闭环
+.\run_sim.ps1 -Test shape            # 形状识别四类回归
 ```
 
-单项回归示例：
+当前结果：
 
-```powershell
-.\run_sim.ps1 -Test edge
-.\run_sim.ps1 -Test chain
-.\run_sim.ps1 -Test roi -Strict
-.\run_sim.ps1 -Test scale -Strict
-.\run_photo_tests.ps1
-.\run_web_tests.ps1
-```
-
-仿真输出位于 `sim/out/`，VCD 位于 `sim/wave/`，两者均不进入版本库。
+| 用例 | 结果 |
+| --- | --- |
+| `tb_edge_proc` / `tb_edge_chain` / `tb_debayer_bg` / `tb_sensor_clipper` / `tb_gamma_correction` / `tb_cam_cfg_sched` | PASS |
+| `tb_cam_ae_awb`（白天/夜间/切回/手动/AE） | PASS |
+| `tb_shape_rec`（圆/矩形/三角形/加号负样本） | 4/4 PASS |
 
 ## Efinity 编译与烧录
-
-安装 **Efinity 2026.1**，并确保 `efx_run.bat`、`efx_run_map.py`、`efx_run_pnr.py` 等工具在 `PATH` 中，或设置 `EFINITY_HOME`：
 
 ```powershell
 $env:EFINITY_HOME = 'C:\Efinity\2026.1'
@@ -115,37 +113,22 @@ $env:EFINITY_HOME = 'C:\Efinity\2026.1'
 .\build\flash_jtag.bat
 ```
 
-编译产物写入 `outflow/`，JTAG 烧录使用板载 FTDI。不同板卡版本必须先核对 `ti60f225_oob.peri.xml` 中的引脚和 Bank 电压。
+> 本版关闭了在线调试（`enable-mark-debug=0`），bitstream 不含 debug hub，
+> 资源占用更低；需要在线抓信号时把该选项改回 1 并恢复 `debug_profile.wizard.json`。
 
 ## 资源占用
 
-| 资源 | 数量 |
-| --- | ---: |
-| LUT4 | 21,596 |
-| FF | 11,823 |
-| SRL8 | 1,303 |
-| RAM10 | 157 |
-| DPRAM10 | 4 |
-| DSP48 | 4 |
+以 `outflow/ti60f225_oob.res.csv` 为准（每次编译后自动更新）。本次编译结果见
+`docs/release-v10.md`。
 
-以上为 v8.12 的 Efinity 最终报告数据，具体数值可能随工具版本和约束变化。
+## 验证范围与已知边界
 
-## 文档
+- 白平衡闭环在仿真里对暖光/冷光均能把三通道偏差压到 7% 以内（死区 6.25%）；
+- 形状识别在合成数据集上准确率 0.960（同一批样本下轻量 CNN 为 0.922）；
+- 识别的工作范围是平面内旋转 ±30°、目标面积 ≥ 约 400 全分辨率像素；
+- 以上均为仿真结论，实板验证需要按板卡实际光照与靶纸复测。
 
-- [v8.12 版本说明](docs/release-v8.12.md)
+## 许可
 
-## 验证状态
-
-已验证：
-
-- SC431HAI2 有效窗口裁剪、去马赛克、白平衡、滤波器、Sobel、NMS、双阈值和形状识别仿真；
-- 圆、矩形、三角形靶纸及加号负样本回归；
-- Efinity map、interface、Pnr 和 pgm 流程；
-- Ti60F225A_V4 + SC431HAI2 + HDMI 实板显示。
-
-工程仍依赖具体板卡引脚、摄像头模组和 Efinity 版本；移植到其他板卡时应重新核对传感器节拍、MIPI Lane 映射、DDR3 参数、HDMI 时钟和 Bank 电压。
-
-## 第三方组件与许可
-
-本项目原创代码采用 [MIT License](LICENSE)。Efinix/Elitestek/OpenCores 生成的 IP、厂商工具文件及测试图片仍适用其原始许可，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
+原创代码采用 [MIT License](LICENSE)。Efinix/Elitestek/OpenCores 生成的 IP、厂商工具
+文件与测试图片仍适用其原始许可，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

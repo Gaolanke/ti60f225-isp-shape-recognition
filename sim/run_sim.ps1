@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('edge', 'sobel', 'chain', 'scale', 'roi', 'gamma', 'debayer', 'clipper', 'sensor', 'camcfg', 'all', 'clean', 'wave')]
+    [ValidateSet('edge', 'sobel', 'chain', 'scale', 'roi', 'gamma', 'debayer', 'clipper', 'sensor', 'camcfg', 'awb', 'shape', 'all', 'clean', 'wave')]
     [string]$Test = 'all',
     [switch]$Strict
 )
@@ -159,6 +159,16 @@ switch ($Test) {
             -Testbench (Join-Path $tbDir 'tb_sensor_gain.v') `
             -ExtraRtl (Join-Path $projRoot 'rtl\cam_i2c_ctrl\i2c\i2c_master_reg_rom.v')
     }
+    'awb' {
+        Invoke-HdlTest -Name 'tb_cam_ae_awb' -Top 'tb_cam_ae_awb' `
+            -Testbench (Join-Path $tbDir 'tb_cam_ae_awb.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\cam_ae_awb.v')
+    }
+    'shape' {
+        Invoke-HdlTest -Name 'tb_shape_rec' -Top 'tb_shape_rec' `
+            -Testbench (Join-Path $tbDir 'tb_shape_rec.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\edge\shape_rec.v')
+    }
     'camcfg' {
         Invoke-HdlTest -Name 'tb_cam_cfg_sched' -Top 'tb_cam_cfg_sched' `
             -Testbench (Join-Path $tbDir 'tb_cam_cfg_sched.v') `
@@ -192,6 +202,12 @@ switch ($Test) {
         Invoke-HdlTest -Name 'tb_cam_cfg_sched' -Top 'tb_cam_cfg_sched' `
             -Testbench (Join-Path $tbDir 'tb_cam_cfg_sched.v') `
             -ExtraRtl (Join-Path $projRoot 'rtl\cam_i2c_ctrl\i2c\cam_cfg_sched.v')
+        Invoke-HdlTest -Name 'tb_cam_ae_awb' -Top 'tb_cam_ae_awb' `
+            -Testbench (Join-Path $tbDir 'tb_cam_ae_awb.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\cam_ae_awb.v')
+        Invoke-HdlTest -Name 'tb_shape_rec' -Top 'tb_shape_rec' `
+            -Testbench (Join-Path $tbDir 'tb_shape_rec.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\edge\shape_rec.v')
     }
     'wave' {
         Invoke-HdlTest -Name 'tb_edge_proc' -Top 'tb_edge_proc' `
