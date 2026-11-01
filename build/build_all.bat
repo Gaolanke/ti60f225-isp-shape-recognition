@@ -21,6 +21,13 @@ if errorlevel 1 (
     echo [ERROR] Re-add it under Sources before compiling, or restore the XML from its backup.
     exit /b 1
 )
+rem guard: Efinity rewrites the project XML after each build and drops shape_ink.v,
+rem putting the retired shape_rec.v back. Fix the file list before compiling.
+python "%~dp0fix_sources.py"
+if errorlevel 1 (
+    echo [ERROR] cannot fix project source list
+    exit /b 1
+)
 rem guard: stale dbg.peri.xml in the root breaks Debugger Step 3 on the next run
 call "%~dp0fix_dbg_peri.bat" >nul
 echo [INFO] project dir: %CD%

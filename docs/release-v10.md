@@ -144,12 +144,15 @@ RAM 减少是因为关闭了在线调试。
 
 ```text
 outflow/ti60f225_oob.bit
-时间   2026-11-01 16:44
 长度   3,017,835 bytes
-SHA256 5b1a1870b0ebe7a712ee3e796584e68b...
 ```
 
 烧录：`build\flash_jtag.bat`
+
+> 编译脚本每次会先跑 `build/fix_sources.py`。Efinity 在编译结束时会把 project XML
+> 重写回它自己记的文件列表（其中仍有已退役的 `shape_rec.v`），使下一次编译在
+> elaborate 阶段找不到该文件。这个脚本在编译前把列表修正回 `shape_ink.v`，幂等。
+> 因此 `git diff` 里看到 `ti60f225_oob.xml` 有变动是正常的。
 
 ## 四、资料
 
