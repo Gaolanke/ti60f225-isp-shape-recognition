@@ -3,7 +3,7 @@
 基于 **Efinix Titanium Ti60F225I3**、**SC431HAI2** 图像传感器和纯 RTL 数据通路的实时
 视觉系统。从 4-lane MIPI CSI-2 采集 1920×1080 RAW10，经 DDR3 帧缓存后完成去马赛克、
 **自适应白平衡 + 自动曝光**、灰度化、滤波、Sobel/Canny 边缘检测、HDMI 输出，以及
-**基于连通域几何特征 + 决策树的圆/矩形/三角形识别**。
+**基于墨迹分割 + 填充率的圆/矩形/三角形识别**。
 
 ![系统总体架构](docs/images/system_architecture.png)
 
@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | 白天偏红、夜间正常、手动白平衡无效 | 编译期固定增益 R=1.5625×/B=1.8125×，8bit 削顶，手动窗口下限仍 1.3125× | 逐帧闭环自适应白平衡（近中性像素 + 灰度世界两段式），增益 0.5~2.0×，手动 0.375~2.25× |
 | 曝光工作点固定 | 固定 4.813× 模拟增益 + 固定曝光 | 轻量 AE：先调曝光后调增益，带死区与稳定等待 |
-| 形状识别参数敏感、响应慢 | 固定半径 Hough + 固定行程 + 5 种长宽比假设 | 1/4 降采样连通域 + 4 个归一化特征 + 57 节点决策树 |
+| 形状识别对线宽/光照/角度敏感 | 固定半径 Hough + 固定行程 + 5 种长宽比假设 | 局部均值墨迹分割 + 连通域填充率 + 两个阈值 |
 
 详见 [白平衡与曝光](docs/white-balance.md)、[识别算法](docs/recognition.md)。
 
@@ -42,7 +42,7 @@ MIPI RAW10 (4 lane)
   -> raw_to_rgb          BGGR 去马赛克
   -> cam_ae_awb          统计 -> 增益/曝光闭环
   -> edge_proc           灰度 -> 中值/高斯 -> Sobel -> NMS -> 双阈值滞回
-  -> shape_rec           1/4 降采样 -> 连通域 -> 4 特征 -> 决策树
+  -> shape_ink           4x4 -> 局部均值墨迹掩码 -> 连通域 -> 填充率分类
   -> HDMI 1920x1080@60
 ```
 
@@ -54,7 +54,7 @@ rtl/
   cam_ae_awb.v              自适应白平衡 + 自动曝光           [本版新增]
   sensor_clipper.v          SC431HAI2 有效窗口裁剪
   edge/edge_proc.v          灰度、滤波、Sobel/Canny、显示合成
-  edge/shape_rec.v          连通域 + 几何特征 + 决策树识别     [本版新增]
+  edge/shape_ink.v          墨迹分割 + 连通域填充率识别        [本版新增]
   debayer/                  RAW -> RGB 与 Q8.8 增益
   frame_buffer_V4/          DDR3 帧缓存与 Bank 切换
   ddr3_controller/          DDR3 控制器
@@ -66,7 +66,8 @@ sim/                        Icarus Verilog 仿真
   run_sim.ps1               回归入口
 build/                      Efinity 编译与 JTAG 烧录脚本
 docs/                       设计说明
-tools/recog_study.py        识别算法的离线对比与决策树导出
+tools/verify_ink.py         用实拍照片复现识别算法并可视化
+tools/recog_study.py        早期算法对比研究（决策树/CNN 对照）
 ti60f225_oob.xml            Efinity 工程
 ti60f225_oob.peri.xml       管脚与接口约束
 ti60f225_oob.sdc            时序约束
@@ -94,7 +95,8 @@ KEY3 短按恢复默认并交还给自动白平衡。
 cd sim
 .\run_sim.ps1 -Test all -Strict      # 全量快速回归
 .\run_sim.ps1 -Test awb              # 白平衡/AE 闭环
-.\run_sim.ps1 -Test shape            # 形状识别四类回归
+.\run_sim.ps1 -Test shape            # 旧识别器(决策树)四类回归
+.\run_sim.ps1 -Test ink              # 墨迹识别器四类回归
 ```
 
 当前结果：
@@ -103,7 +105,8 @@ cd sim
 | --- | --- |
 | `tb_edge_proc` / `tb_edge_chain` / `tb_debayer_bg` / `tb_sensor_clipper` / `tb_gamma_correction` / `tb_cam_cfg_sched` | PASS |
 | `tb_cam_ae_awb`（白天/夜间/切回/手动/AE） | PASS |
-| `tb_shape_rec`（圆/矩形/三角形/加号负样本） | 4/4 PASS |
+| `tb_shape_ink`（圆/矩形/三角形/空白，墨迹分割） | 4/4 PASS |
+| `tb_shape_rec`（旧的决策树识别器） | 4/4 PASS |
 
 ## Efinity 编译与烧录
 
@@ -124,8 +127,8 @@ $env:EFINITY_HOME = 'C:\Efinity\2026.1'
 ## 验证范围与已知边界
 
 - 白平衡闭环在仿真里对暖光/冷光均能把三通道偏差压到 7% 以内（死区 6.25%）；
-- 形状识别在合成数据集上准确率 0.960（同一批样本下轻量 CNN 为 0.922）；
-- 识别的工作范围是平面内旋转 ±30°、目标面积 ≥ 约 400 全分辨率像素；
+- 形状识别在 14 张实拍照片上框出 30+ 个图形，填充率与理论值吻合（圆 0.79 / 方 0.95 / 三角 0.52）；
+- 识别对旋转不敏感（填充率是形状不变量），要求外接框 ≥ 14×14 采样点、轮廓基本闭合；
 - 以上均为仿真结论，实板验证需要按板卡实际光照与靶纸复测。
 
 ## 许可

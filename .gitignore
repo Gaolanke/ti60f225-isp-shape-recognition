@@ -67,3 +67,9 @@ Thumbs.db
 /sim/tb/tb_cam_ae_awb.v.bak
 /.lock
 *.lock
+
+# 实拍验证中间产物
+/build/recog/
+
+# 保留的对照实现（不参与编译）
+!rtl/edge/shape_rec.v.bak

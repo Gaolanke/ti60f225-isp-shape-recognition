@@ -1520,17 +1520,17 @@ wire [3:0]  shape_dbg;
 
 //==============================================================================
 // 形状识别器选择
-//   1 = 旧的参数化检测器 (固定半径 Hough + 固定行程 + 5 种长宽比假设)
-//       对"打印靶纸"这类线条粗、尺寸规整的目标更稳, 实拍手绘图纸优先用这个
-//   0 = 新的连通域 + 几何特征 + 决策树
-//       对干净闭合轮廓、尺度变化更鲁棒, 但训练分布是合成的, 实拍细线/纹理纸
-//       容易把多个目标并成一块
-//   两者端口完全一致, 用 generate 只例化一个.
+//   SHAPE_LEGACY = 0 : 墨迹分割 + 填充率分类 (默认)
+//       找"比周围更暗的笔迹", 不依赖 Sobel 方向, 细线/浅线/光照不均都能用
+//   SHAPE_LEGACY = 1 : 旧的参数化检测器 (固定半径 Hough + 固定行程)
+//       需要目标线条很粗、对比度很高时才稳
 //==============================================================================
-localparam integer USE_LEGACY_SHAPE = 1;
+localparam integer SHAPE_LEGACY = 0;
+
+wire [7:0] ink_thr = th_low_v + 8'd8;
 
 generate
-if (USE_LEGACY_SHAPE) begin : g_legacy_shape
+if (SHAPE_LEGACY) begin : g_legacy_shape
     shape_proc #(
         .H_ACTIVE       (HACT),
         .V_ACTIVE       (VACT),
@@ -1572,24 +1572,28 @@ if (USE_LEGACY_SHAPE) begin : g_legacy_shape
         .o_shape_hit (shape_hit),
         .o_dbg       (shape_dbg)
     );
-end else begin : g_new_shape
-    shape_rec #(
+end else begin : g_ink_shape
+    shape_ink #(
         .H_ACTIVE     (HACT),
         .V_ACTIVE     (VACT),
-        .MIN_SPAN     (24),
-        .MAX_SPAN     (12000)
+        .LAB          (32),
+        .MIN_SPAN     (400),
+        .MIN_WH       (14),
+        .THR_DEF      (18),
+        .Y_OFS        (2)
     ) u_shape_proc (
         .clk         (hdmi_tx_slow_clk),
         .rst_n       (vid_rst_n),
-        .i_de        (e0_de),
-        .i_hs        (e0_hs),
-        .i_vs        (e0_vs),
-        .i_rgb       (e0_rgb),
+        .i_de        (hdmi_tx_de),
+        .i_hs        (hdmi_tx_hs),
+        .i_vs        (hdmi_tx_vs),
+        .i_rgb       ({hdmi_tx_bdata, hdmi_tx_gdata, hdmi_tx_rdata}),
         .i_edge      (e0_edge),
         .i_dir16     (e0_dir16),
         .i_row       (e0_row),
         .i_en        (shape_on),
-        .i_draw_x0   (11'd0),
+        .i_draw_x0   (12'd0),
+        .i_thr       (ink_thr),
         .o_de        (edge_de),
         .o_hs        (edge_hs),
         .o_vs        (edge_vs),

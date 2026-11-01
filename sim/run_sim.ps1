@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('edge', 'sobel', 'chain', 'scale', 'roi', 'gamma', 'debayer', 'clipper', 'sensor', 'camcfg', 'awb', 'shape', 'all', 'clean', 'wave')]
+    [ValidateSet('edge', 'sobel', 'chain', 'scale', 'roi', 'gamma', 'debayer', 'clipper', 'sensor', 'camcfg', 'awb', 'shape', 'ink', 'all', 'clean', 'wave')]
     [string]$Test = 'all',
     [switch]$Strict
 )
@@ -164,6 +164,11 @@ switch ($Test) {
             -Testbench (Join-Path $tbDir 'tb_cam_ae_awb.v') `
             -ExtraRtl (Join-Path $projRoot 'rtl\cam_ae_awb.v')
     }
+    'ink' {
+        Invoke-HdlTest -Name 'tb_shape_ink' -Top 'tb_shape_ink' `
+            -Testbench (Join-Path $tbDir 'tb_shape_ink.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\edge\shape_ink.v')
+    }
     'shape' {
         Invoke-HdlTest -Name 'tb_shape_rec' -Top 'tb_shape_rec' `
             -Testbench (Join-Path $tbDir 'tb_shape_rec.v') `
@@ -208,6 +213,9 @@ switch ($Test) {
         Invoke-HdlTest -Name 'tb_shape_rec' -Top 'tb_shape_rec' `
             -Testbench (Join-Path $tbDir 'tb_shape_rec.v') `
             -ExtraRtl (Join-Path $projRoot 'rtl\edge\shape_rec.v')
+        Invoke-HdlTest -Name 'tb_shape_ink' -Top 'tb_shape_ink' `
+            -Testbench (Join-Path $tbDir 'tb_shape_ink.v') `
+            -ExtraRtl (Join-Path $projRoot 'rtl\edge\shape_ink.v')
     }
     'wave' {
         Invoke-HdlTest -Name 'tb_edge_proc' -Top 'tb_edge_proc' `
